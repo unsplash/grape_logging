@@ -56,6 +56,7 @@ module GrapeLogging
         error = catch(:error) do
           begin
             @app_response = @app.call(@env)
+            @response = Rack::Response[*@app_response]
           rescue StandardError => e
             # Log as 500 + message
             status = e.respond_to?(:status) ? e.status : 500
@@ -78,8 +79,6 @@ module GrapeLogging
           # Throw again
           throw(:error, error)
         else
-          @response = Rack::Response[*@app_response]
-
           # Call after hook properly
           after(response.status, response.body, response.headers)
         end
