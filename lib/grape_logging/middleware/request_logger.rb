@@ -32,7 +32,7 @@ module GrapeLogging
         invoke_included_loggers(:before)
       end
 
-      def after(_status, _body, _headers = {})
+      def after
         stop_time
 
         # Perform repotters
@@ -62,7 +62,9 @@ module GrapeLogging
             status = e.respond_to?(:status) ? e.status : 500
             body = e.message
 
-            after(status, body)
+            @response = Rack::Response.new(body, status)
+
+            after
 
             # Re-raise exception
             raise e
@@ -74,13 +76,14 @@ module GrapeLogging
         # when no error occures.
         if error
           # Call with error & response
-          after(error[:status], error[:message])
+          @response = Rack::Response.new(body, status)
+          after
 
           # Throw again
           throw(:error, error)
         else
           # Call after hook properly
-          after(response.status, response.body, response.headers)
+          after
         end
 
         # Otherwise return original response
