@@ -32,10 +32,8 @@ module GrapeLogging
         invoke_included_loggers(:before)
       end
 
-      def after(status, body, headers = {})
+      def after(_status, _body, _headers = {})
         stop_time
-
-        @response = Rack::Response.new([body], status, headers)
 
         # Perform repotters
         @reporter.perform(collect_parameters)
@@ -80,10 +78,10 @@ module GrapeLogging
           # Throw again
           throw(:error, error)
         else
-          status, headers, body = *@app_response
+          @response = Rack::Response[*@app_response]
 
           # Call after hook properly
-          after(status, body, headers)
+          after(response.status, response.body, response.headers)
         end
 
         # Otherwise return original response
