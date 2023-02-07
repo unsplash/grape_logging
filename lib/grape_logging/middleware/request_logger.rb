@@ -1,27 +1,29 @@
+require 'grape'
 require 'grape/middleware/base'
 
 module GrapeLogging
   module Middleware
     class RequestLogger < Grape::Middleware::Base
-
-      ActiveSupport::Notifications.subscribe('sql.active_record') do |*args|
-        event = ActiveSupport::Notifications::Event.new(*args)
-        GrapeLogging::Timings.append_db_runtime(event)
-      end if defined?(ActiveRecord)
+      if defined?(ActiveRecord)
+        ActiveSupport::Notifications.subscribe('sql.active_record') do |*args|
+          event = ActiveSupport::Notifications::Event.new(*args)
+          GrapeLogging::Timings.append_db_runtime(event)
+        end
+      end
 
       # Persist response status & response (body)
       # to use int in parameters
-      attr_accessor :response_status, :response_body
+      attr_accessor :response
 
       def initialize(app, options = {})
         super
 
         @included_loggers = @options[:include] || []
         @reporter = if options[:instrumentation_key]
-          Reporters::ActiveSupportReporter.new(@options[:instrumentation_key])
-        else
-          Reporters::LoggerReporter.new(@options[:logger], @options[:formatter], @options[:log_level])
-        end
+                      Reporters::ActiveSupportReporter.new(@options[:instrumentation_key])
+                    else
+                      Reporters::LoggerReporter.new(@options[:logger], @options[:formatter], @options[:log_level])
+                    end
       end
 
       def before
@@ -30,12 +32,10 @@ module GrapeLogging
         invoke_included_loggers(:before)
       end
 
-      def after(status, response)
+      def after(status, body, headers = {})
         stop_time
 
-        # Response status
-        @response_status = status
-        @response_body   = response
+        @response = Rack::Response.new([body], status, headers)
 
         # Perform repotters
         @reporter.perform(collect_parameters)
@@ -58,9 +58,12 @@ module GrapeLogging
         error = catch(:error) do
           begin
             @app_response = @app.call(@env)
-          rescue => e
+          rescue StandardError => e
             # Log as 500 + message
-            after(e.respond_to?(:status) ? e.status : 500, e.message)
+            status = e.respond_to?(:status) ? e.status : 500
+            body = e.message
+
+            after(status, body)
 
             # Re-raise exception
             raise e
@@ -77,10 +80,10 @@ module GrapeLogging
           # Throw again
           throw(:error, error)
         else
-          status, _, resp = *@app_response
+          status, headers, body = *@app_response
 
           # Call after hook properly
-          after(status, resp)
+          after(status, body, headers)
         end
 
         # Otherwise return original response
@@ -91,7 +94,7 @@ module GrapeLogging
 
       def parameters
         {
-          status: response_status,
+          status: response.status,
           time: {
             total: total_runtime,
             db: db_runtime,
@@ -137,7 +140,7 @@ module GrapeLogging
       def collect_parameters
         parameters.tap do |params|
           @included_loggers.each do |logger|
-            params.merge! logger.parameters(request, response_body) do |_, oldval, newval|
+            params.merge! logger.parameters(request, response) do |_, oldval, newval|
               oldval.respond_to?(:merge) ? oldval.merge(newval) : newval
             end
           end
